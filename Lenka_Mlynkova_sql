@@ -1,0 +1,273 @@
+CREATE TABLE t_Lenka_Mlynkova_SQL_projekt AS
+( 
+	WITH DayInfo AS
+	(
+			#binární proměnná pro víkend / pracovní den
+			SELECT	 *, 
+					DAYNAME(`date`) AS day_name,
+				CASE
+				    WHEN  WEEKDAY(`date`)< 5 THEN '0' 
+				    ELSE '1'
+				END AS weekend
+			FROM covid19_basic_differences cbd1
+	),
+	
+	
+	MonthInfo AS
+	(
+			#HOTOVO 1b roční období daného dne (zakódujte prosím jako 0 až 3)
+			SELECT * ,
+				CASE
+					 WHEN   month(`date`) IN (3,4,5) THEN '0' 
+					 WHEN  	month(`date`) IN (6,7,8) THEN '1' 
+					 WHEN  	month(`date`) IN (9,10,11) THEN '2' 
+					 WHEN 	month(`date`) IN (12,1,2) THEN '3'
+				    ELSE 'není datum'
+				END AS season
+			FROM covid19_basic_differences cbd2
+	),
+	
+	DensityMedian AS 
+	(
+			#hustota, medián
+			SELECT 	cbd.`date`,
+					cbd.country, 
+					cbd.confirmed, 
+					cbd.deaths, 
+					cbd.recovered, 
+					ROUND(c.population_density,2) AS population_density,
+					c.median_age_2018,
+					c.population 
+			FROM covid19_basic_differences cbd
+				LEFT JOIN Lenka_countries c 
+				ON cbd.country = c.country
+	),
+	
+	Mortality AS 
+	(
+			SELECT 	cbd.`date`,
+					cbd.country,
+					cbd.confirmed, 
+					cbd.deaths, 
+					cbd.recovered,
+					e.latestYear, 
+					e.mortaliy_under5 as mortality_under5
+			FROM covid19_basic_differences cbd 
+					LEFT JOIN 
+						(SELECT country,
+								MAX( `year`) as latestYear,  
+								mortaliy_under5 
+						FROM Lenka_economies 
+							WHERE mortaliy_under5 IS NOT NULL
+							GROUP BY country ) AS e
+					ON cbd.country=e.country  
+	),
+		
+	
+	GINIinfo AS 
+	(
+				# HDP,dětská úmrtnost
+			SELECT 	cbd.`date`,
+					cbd.country,
+					cbd.confirmed, 
+					cbd.deaths, 
+					cbd.recovered,
+					e.latestYear, 
+					e.GINI
+			FROM covid19_basic_differences cbd 
+					LEFT JOIN 
+						(SELECT country,
+								MAX( `year`) as latestYear, 
+								GINI 
+						FROM Lenka_economies 
+							WHERE gini IS NOT NULL 
+							GROUP BY country ) AS e
+					ON cbd.country=e.country  
+	),
+	
+	HDP AS 
+	(
+				# HDP
+			SELECT 	cbd.`date`,
+					cbd.country,
+					cbd.confirmed, 
+					cbd.deaths, 
+					cbd.recovered,
+					e.latestYear, 
+					ROUND(e.GDP/e.population,0) AS GDP,
+					e.population
+				
+			FROM covid19_basic_differences cbd 
+				LEFT JOIN 
+						(SELECT country,
+								MAX( `year`) as latestYear, 
+								GDP,
+								population
+								FROM Lenka_economies 
+								where GDP IS NOT NULL
+						
+							GROUP BY country ) AS e
+				ON cbd.country=e.country 
+	),
+	
+	ExpectedLife AS
+	(
+			#rozdíl mezi očekávanou dobou dožití v roce 1965 a v roce 2015
+			SELECT 	a.country, 
+					ROUND( b.lifeExp2015,1) AS LifeExp2015, 
+					ROUND(a.lifeExp1965,1) AS LifeExp1965, 
+					ROUND((b.lifeExp2015-a.lifeExp1965),1) AS LifeExpDif
+			FROM 
+					(SELECT le.country, 
+							le.life_expectancy AS lifeExp1965 
+					FROM Lenka_life_expectancy AS le
+					WHERE `year` = 1965) AS a
+			JOIN 
+					(SELECT le.country, 
+							le.life_expectancy AS lifeExp2015 
+					FROM Lenka_life_expectancy AS le
+					WHERE `year` = 2015) AS b
+			ON a.country=b.country	
+	),
+	
+	WeatherInfo AS 
+	(
+			#napojení weather na Lenka_countries 
+			SELECT 	lc.country,
+					ww.city,
+					ww.date,
+					ww.averageDayTemp,
+					ww.RainyHours,
+					ww.MaxGustWind
+					
+			FROM 
+					(SELECT w.city,
+							w.`date`, 
+							AVG(w.temp) as averageDayTemp,
+							w2.RainyHours,
+							w3.MaxGustWind
+					FROM weather w
+					
+						LEFT JOIN 
+								(SELECT	w2.city,
+										w2.`date`, 
+										count (w2.`hour`)*3 AS RainyHours
+								FROM weather w2
+									WHERE w2.rain != 0
+									GROUP BY w2.city,w2.`date`) AS w2
+							ON 	w.city = w2.city
+							AND w.date=w2.date
+						LEFT JOIN 
+								(SELECT w3.city,
+										w3.`date` ,
+										max(gust) AS MaxGustWind
+								FROM weather w3
+									GROUP BY city, `date`) AS w3
+							ON 	w.city=w3.city
+							AND w.`date`=w3.`date`
+					WHERE w.`hour` in (6,9,12,15,18)
+					GROUP BY w.city, w.`date`
+					) AS ww
+					
+					JOIN Lenka_countries AS lc 
+					ON ww.city = lc.capital_city 
+	),
+	
+	ReligionInfo AS 
+	(
+			SELECT 
+			
+				c.country,
+				r.year,
+				
+				CASE WHEN r.religion = 'Christianity' THEN ROUND (r.population/c.population * 100,2) END AS Christianity,
+				CASE WHEN r.religion = 'Islam' THEN ROUND (r.population/c.population * 100,2) END AS Islam,
+				CASE WHEN r.religion = 'Buddhism' THEN ROUND (r.population/c.population * 100,2) END AS Buddhism,
+				CASE WHEN r.religion = 'Folk Religions' THEN ROUND (r.population/c.population * 100,2) END AS Folk_Religions,
+				CASE WHEN r.religion = 'Hinduism' THEN ROUND (r.population/c.population * 100,2) END AS Hinduism,
+				CASE WHEN r.religion = 'Judaism' THEN ROUND (r.population/c.population * 100,2) END AS Judaism,
+				CASE WHEN r.religion = 'Other Religions' THEN ROUND (r.population/c.population * 100,2) END AS Other_Religions,
+				CASE WHEN r.religion = 'Unaffiliated Religions' THEN ROUND (r.population/c.population * 100,2) END AS Unaffiliated_Religions
+			
+			FROM Lenka_countries c 
+				
+			LEFT JOIN (SELECT 	country, 
+								religion, 
+								population,
+								year 
+						FROM Lenka_religions
+								WHERE`year` = '2020'
+								AND country != 'All Countries') AS r
+					
+			ON c.country = r.country
+			
+		)
+	
+	
+	SELECT	d.date,
+			d.day_name,
+			d.weekend,
+			m.season,
+			d.country,
+			d.confirmed,
+			d.deaths,
+			d.recovered,
+			lct.tests_performed,
+			dm.population_density, 
+			h.population,
+			dm.median_age_2018,
+			gi.GINI,
+			mo.mortality_under5,
+			h.GDP,
+			el.LifeExpDif,
+			wi.averageDayTemp,
+			wi.RainyHours,
+			wi.MaxGustWind,
+			ri.Christianity,
+			ri.Islam,
+			ri.Buddhism,
+			ri.Folk_Religions,
+			ri.Hinduism,
+			ri.Judaism,
+			ri.Other_Religions,
+			ri.Unaffiliated_Religions
+			
+	FROM DayInfo AS d
+	
+		LEFT JOIN MonthInfo AS m
+		ON d.country = m.country
+		AND d.date=m.date
+	
+		LEFT JOIN Lenka_covid19_tests AS lct
+		ON d.country = lct.country
+		AND d.date=lct.date
+		
+		LEFT JOIN DensityMedian AS dm
+		ON d.country = dm.country
+		AND d.date=dm.date
+		
+		LEFT JOIN Mortality AS mo
+		ON d.country = mo.country
+		AND d.date=mo.date
+		
+		LEFT JOIN GINIinfo AS gi
+		ON d.country = gi.country
+		AND d.date=gi.date
+		
+		LEFT JOIN HDP AS h
+		ON d.country = h.country
+		AND d.date=h.date
+		
+		LEFT JOIN ExpectedLife AS el
+		ON d.country = el.country
+		
+		LEFT JOIN WeatherInfo AS wi
+		ON d.country = wi.country
+		AND d.date = wi.date
+		
+		LEFT JOIN ReligionInfo AS ri
+		ON d.country = ri.country
+	);
+		
+	
+			
